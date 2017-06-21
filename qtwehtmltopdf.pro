@@ -1,4 +1,4 @@
-QT += core webengine webenginewidgets
+QT += core webengine webenginewidgets printsupport
 
 CONFIG += c++11 console
 
