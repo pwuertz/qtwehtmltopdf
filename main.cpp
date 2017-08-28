@@ -39,10 +39,18 @@ int main(int argc, char *argv[])
         {"B", "Margin <bottom> (unused)", "bottom-margin"},
         {"print-media-type", "(unused)"},
         {"printer", "Send output to printer instead of PDF file"},
+        {"list-printers", "Show list of available printers and exit"},
     });
     parser.addPositionalArgument("url", "URL to HTML document");
     parser.addPositionalArgument("output", "PDF filename, printer name or '-' for stdout");
     parser.process(a);
+
+    // if list-printers is set, show list and exit
+    if (parser.isSet("list-printers")) {
+        foreach (const QString &name, QPrinterInfo::availablePrinterNames())
+            qInfo().quote() << name;
+        return 0;
+    }
 
     // check number of positional args
     auto args_url_output = parser.positionalArguments();
