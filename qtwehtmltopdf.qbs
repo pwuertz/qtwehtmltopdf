@@ -8,4 +8,12 @@ QtApplication {
         submodules: ["core", "webengine", "webenginewidgets", "printsupport"]
     }
     files: ["main.cpp"]
+
+    // Deploy
+    Group {
+        name: "Application binary"
+        fileTagsFilter: "application"
+        qbs.install: true
+        qbs.installDir: "."
+    }
 }
