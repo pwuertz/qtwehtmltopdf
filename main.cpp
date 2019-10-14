@@ -20,26 +20,25 @@
 #endif
 
 
-const std::map<const QString, const double> to_mm_factor = {
-    {"mm", 1.0},
-    {"cm", 10.0},
-    {"in", 25.4},
-    {"pt", 0.352778},
-};
+double to_mm(const QString& unit)
+{
+    if (unit == "mm") { return 1.0; }
+    if (unit == "cm") { return 10.0; }
+    if (unit == "in") { return 25.4; }
+    if (unit == "pt") { return 0.352778; }
+    return 0.0;
+}
 
 /**
  * @brief cssLengthToMm
  * @param s CSS length value
  * @return length in mm
  */
-double cssLengthToMm(QString s) {
-    double value = s.left(s.length() - 2).toDouble();
-    try {
-        auto unit = s.right(2);
-        return value * to_mm_factor.at(unit);
-    } catch (const std::out_of_range&) {
-        return 0.0;
-    }
+double cssLengthToMm(const QString& s)
+{
+    const double value = s.left(s.length() - 2).toDouble();
+    const QString unit = s.right(2);
+    return value * to_mm(unit);
 }
 
 /**
@@ -47,7 +46,7 @@ double cssLengthToMm(QString s) {
  * @param page web page to query for css page layout
  * @param cb callback invoked after querying page layout
  */
-void getCssPageLayout(QWebEnginePage& page, std::function<void(QPageLayout)> cb)
+void getCssPageLayout(QWebEnginePage& page, std::function<void(const QPageLayout&)> cb)
 {
     constexpr auto jscode = R"JSCODE(
     (function getPrintPageStyle() {
@@ -89,28 +88,97 @@ void getCssPageLayout(QWebEnginePage& page, std::function<void(QPageLayout)> cb)
         return pageStyle;
     })()
     )JSCODE";
-    page.runJavaScript(jscode, [cb](const QVariant &result){
-        auto style = result.toMap();
-        auto default_margin_mm = cssLengthToMm(style["margins"].toString());
+    page.runJavaScript(jscode, [cb=std::move(cb)](const QVariant& result) {
+        const QVariantMap pageStyle = result.toMap();
+        const double defaultMargin_mm = cssLengthToMm(pageStyle["margins"].toString());
         std::vector<double> margins_mm;
-        for(const auto& margin_name: {"margin-left", "margin-top", "margin-right", "margin-bottom"}) {
-            double margin_mm = default_margin_mm;
-            QString margin_str(style[margin_name].toString());
-            if (!margin_str.isEmpty())
-                margin_mm = cssLengthToMm(margin_str);
-            margins_mm.emplace_back(margin_mm);
+        for(const auto& marginName: {"margin-left", "margin-top", "margin-right", "margin-bottom"})
+        {
+            const QString marginCss(pageStyle[marginName].toString());
+            const double margin_mm = (marginCss.isEmpty()) ? defaultMargin_mm
+                                                           : cssLengthToMm(marginCss);
+            margins_mm.push_back(margin_mm);
         }
-        QPageLayout layout(QPageSize(QPageSize::A4), QPageLayout::Portrait,
-                           QMarginsF(margins_mm[0], margins_mm[1], margins_mm[2], margins_mm[3]), QPageLayout::Millimeter);
+        const QPageLayout layout(
+            QPageSize(QPageSize::A4), QPageLayout::Portrait,
+            QMarginsF(margins_mm[0], margins_mm[1], margins_mm[2], margins_mm[3]),
+            QPageLayout::Millimeter
+        );
         cb(layout);
     });
 }
 
+QByteArray readStdin()
+{
+    QFile file;
+    #ifdef Q_OS_WIN
+    setmode(fileno(stdin), O_BINARY);
+    #endif
+    file.open(fileno(stdin), QIODevice::OpenMode(QFile::ReadOnly));
+    const QByteArray data = file.readAll();
+    file.close();
+    return data;
+}
+
+bool writePdf(const QString& outputFilename, const QByteArray& data)
+{
+    // Write to stdout
+    if (outputFilename == "-") {
+        QFile file;
+        #ifdef Q_OS_WIN
+        setmode(fileno(stdout), O_BINARY);
+        #endif
+        file.open(fileno(stdout), QIODevice::OpenMode(QIODevice::OpenModeFlag::WriteOnly));
+        file.write(data);
+        file.close();
+        return true;
+    }
+    // Write to file
+    QFile file(outputFilename);
+    bool ok = file.open(QIODevice::WriteOnly);
+    ok &= file.write(data) == data.size();
+    file.close();
+    return ok;
+}
+
+void printToPDF(QWebEnginePage& page, const QPageLayout& layout, const QString& outputFilename)
+{
+    page.printToPdf([outputFilename](const QByteArray& pdfData) {
+        if (pdfData.isEmpty()) {
+            qCritical() << "Error printing page";
+            QCoreApplication::exit(EXIT_FAILURE);
+            return;
+        }
+        const bool ok = writePdf(outputFilename, pdfData);
+        QCoreApplication::exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
+    }, layout);
+}
+
+void printToPrinter(QWebEnginePage& page, const QPageLayout& layout, const QString& printerName)
+{
+    // Validate printer
+    const auto printerInfo = QPrinterInfo::printerInfo(printerName);
+    if (printerInfo.isNull()) {
+        qCritical() << "Printer not found";
+        QCoreApplication::exit(EXIT_FAILURE);
+        return;
+    }
+    auto printer = std::make_shared<QPrinter>(printerInfo);
+    qDebug() << "setPageLayout" << printer->setPageLayout(layout);
+    page.print(printer.get(), [printer](const bool success) {
+        if (!success) {
+            qCritical() << "Error printing page";
+        }
+        QCoreApplication::exit(success ? EXIT_SUCCESS : EXIT_FAILURE);
+    });
+}
+
+
 int main(int argc, char *argv[])
 {
-    QApplication a(argc, argv);
+    QApplication app(argc, argv);
 
-    // initialize webengine and delete cache
+    // Initialize webengine and delete cache
     QtWebEngine::initialize();
     QDir cache_dir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
     cache_dir.removeRecursively();
@@ -122,89 +190,60 @@ int main(int argc, char *argv[])
     parser.addOptions({
         {"printer", "Send output to printer instead of PDF file"},
         {"list-printers", "Show list of available printers and exit"},
+        {"post", "Send HTTP POST request with data from stdin"},
     });
     parser.addPositionalArgument("url", "URL to HTML document");
     parser.addPositionalArgument("output", "PDF filename, printer name or '-' for stdout");
-    parser.process(a);
+    parser.process(app);
 
-    // if list-printers is set, show list and exit
+    // If list-printers is set, show list and exit
     if (parser.isSet("list-printers")) {
-        foreach (const QString &name, QPrinterInfo::availablePrinterNames())
-            qInfo().quote() << name;
-        return 0;
+        const QStringList printerNames = QPrinterInfo::availablePrinterNames();
+        for (const auto& name : printerNames) { qInfo().quote() << name; }
+        return EXIT_SUCCESS;
     }
 
-    // check number of positional args
-    auto args_url_output = parser.positionalArguments();
-    if (args_url_output.size() != 2)
+    // Check number of positional args
+    const QStringList args_url_output = parser.positionalArguments();
+    if (args_url_output.size() != 2) {
         parser.showHelp(1);
-    QUrl document_url(args_url_output[0]);
-    QString output_name(args_url_output[1]);
+    }
+    const QUrl documentUrl(args_url_output[0]);
+    const QString outputName(args_url_output[1]);
 
-    // load page
+    // Create HTTP request for given program arguments
+    const QWebEngineHttpRequest request = [&]() {
+        QWebEngineHttpRequest request { documentUrl };
+        if (parser.isSet("post")) {
+            request.setMethod(QWebEngineHttpRequest::Post);
+            request.setHeader("Content-Type", "application/json");  // Fixed type for now
+            request.setPostData(readStdin());
+        }
+        return request;
+    }();
+
+    // Create web page and PDF creation handlers
     QWebEnginePage page;
-    page.load(document_url);
-    QObject::connect(&page, &QWebEnginePage::loadFinished, &page, [&](bool ok){
+    QObject::connect(&page, &QWebEnginePage::loadFinished, &page, [&](const bool ok) {
         if (!ok) {
             qCritical() << "Error loading page";
-            QCoreApplication::exit(-1);
+            QCoreApplication::exit(EXIT_FAILURE);
             return;
         }
-
-        // if page loaded, queue print request (add time for evaluating js)
-        // TODO: how to ensure that page finished js processing?
-        QTimer::singleShot(100, [&](){
-            getCssPageLayout(page, [&](QPageLayout layout){
+        // Queue print request after page finished loading
+        // TODO: How to ensure that page finished js processing? -> Add some time as workaround
+        QTimer::singleShot(100, &page, [&]() {
+            getCssPageLayout(page, [&](const QPageLayout& layout) {
                 if (!parser.isSet("printer")) {
-                    // print to PDF file
-                    page.printToPdf([&](const QByteArray& data){
-                        if (!data.size()) {
-                            qCritical() << "Error printing page";
-                            QCoreApplication::exit(-1);
-                            return;
-                        }
-                        if (output_name != "-") {
-                            // save to file
-                            QFile file(output_name);
-                            file.open(QIODevice::WriteOnly);
-                            file.write(data);
-                            file.close();
-                            QCoreApplication::exit(0);
-                        } else {
-                            // write to stdout
-                            QFile file;
-        #ifdef Q_OS_WIN
-                            setmode(fileno(stdout), O_BINARY);
-        #endif
-                            file.open(fileno(stdout), QIODevice::OpenMode(QIODevice::OpenModeFlag::WriteOnly));
-                            file.write(data);
-                            file.close();
-                            QCoreApplication::exit(0);
-                        }
-                    }, layout);
+                    printToPDF(page, layout, outputName);
                 } else {
-                    // print to named printer
-                    auto printer_info = QPrinterInfo::printerInfo(output_name);
-                    if (printer_info.isNull()) {
-                        qCritical() << "Printer not found";
-                        QCoreApplication::exit(EXIT_FAILURE);
-                        return;
-                    }
-                    QPrinter* printer = new QPrinter(printer_info);
-                    qDebug() << "setPageLayout" << printer->setPageLayout(layout);
-                    page.print(printer, [printer](bool success){
-                        delete printer;
-                        if (success)
-                            QCoreApplication::exit(EXIT_SUCCESS);
-                        else {
-                            qCritical() << "Error printing page";
-                            QCoreApplication::exit(EXIT_FAILURE);
-                        }
-                    });
+                    printToPrinter(page, layout, outputName);
                 }
             });
         });
     });
 
-    return a.exec();
+    // Init process by loading the web page
+    page.load(request);
+    return QApplication::exec();
 }

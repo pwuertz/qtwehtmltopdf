@@ -7,6 +7,7 @@ QtApplication {
         name: "Qt"
         submodules: ["core", "webengine", "webenginewidgets", "printsupport"]
     }
+    cpp.cxxLanguageVersion: "c++17"
     files: ["main.cpp"]
 
     // Deploy
