@@ -108,13 +108,19 @@ void getCssPageLayout(QWebEnginePage& page, std::function<void(const QPageLayout
     });
 }
 
+constexpr auto fileno_bin = [](auto fd) {
+    #ifdef Q_OS_WIN
+    _setmode(_fileno(fd), _O_BINARY);
+    return _fileno(fd);
+    #else
+    return fileno(fd);
+    #endif
+};
+
 QByteArray readStdin()
 {
     QFile file;
-    #ifdef Q_OS_WIN
-    setmode(fileno(stdin), O_BINARY);
-    #endif
-    file.open(fileno(stdin), QIODevice::OpenMode(QFile::ReadOnly));
+    file.open(fileno_bin(stdin), QIODevice::OpenMode(QFile::ReadOnly));
     const QByteArray data = file.readAll();
     file.close();
     return data;
@@ -125,10 +131,7 @@ bool writePdf(const QString& outputFilename, const QByteArray& data)
     // Write to stdout
     if (outputFilename == "-") {
         QFile file;
-        #ifdef Q_OS_WIN
-        setmode(fileno(stdout), O_BINARY);
-        #endif
-        file.open(fileno(stdout), QIODevice::OpenMode(QIODevice::OpenModeFlag::WriteOnly));
+        file.open(fileno_bin(stdout), QIODevice::OpenMode(QIODevice::OpenModeFlag::WriteOnly));
         file.write(data);
         file.close();
         return true;
@@ -176,10 +179,10 @@ void printToPrinter(QWebEnginePage& page, const QPageLayout& layout, const QStri
 
 int main(int argc, char *argv[])
 {
+    QtWebEngine::initialize();
     QApplication app(argc, argv);
 
-    // Initialize webengine and delete cache
-    QtWebEngine::initialize();
+    // Delete WebEngine cache
     QDir cache_dir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
     cache_dir.removeRecursively();
 
