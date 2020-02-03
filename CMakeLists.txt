@@ -10,6 +10,7 @@ add_executable(${PROJECT_NAME} "main.cpp")
 set_target_properties(${PROJECT_NAME} PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED YES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${PROJECT_NAME}"
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt5::WebEngine
