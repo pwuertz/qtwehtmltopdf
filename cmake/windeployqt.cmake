@@ -12,7 +12,7 @@ function(windeployqt target)
     cmake_parse_arguments("DEPLOY_ARG" "" "QMLDIR" "" ${ARGN})
     list(APPEND WINDEPLOYQT_ARGS
         "--verbose" "0" "--no-compiler-runtime" "--no-translations"
-        "--no-angle" "--release" "--no-opengl-sw"
+        "--no-angle" "--no-opengl-sw"
     )
     if(DEPLOY_ARG_QMLDIR)
         list(APPEND WINDEPLOYQT_ARGS "--qmldir" "${DEPLOY_ARG_QMLDIR}")
@@ -21,6 +21,6 @@ function(windeployqt target)
         POST_BUILD
         COMMAND set PATH="${_qt_bin_dir}"
         COMMAND ${CMAKE_COMMAND} -E echo "Deploy Qt for ${target}"
-        COMMAND "${WINDEPLOYQT_EXECUTABLE}" ARGS ${WINDEPLOYQT_ARGS} "$<TARGET_FILE:${target}>"
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}" ARGS ${WINDEPLOYQT_ARGS} $<$<CONFIG:Release>:"--release"> "$<TARGET_FILE:${target}>"
     )
 endfunction()
